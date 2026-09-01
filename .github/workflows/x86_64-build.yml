@@ -2,6 +2,9 @@ name: x86_64-build
 
 on:
   push:
+    paths:
+      - '.github/workflows/x86_64-build.yml'
+      - 'scripts/**'
   workflow_dispatch:
 
 concurrency:
@@ -26,7 +29,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libcap-dev bubblewrap cmake jq
+            build-essential pkg-config libcap-dev bubblewrap cmake jq libssl-dev
 
       - name: Install Rust toolchain
         run: |
@@ -44,6 +47,7 @@ jobs:
       - name: Compute cache key
         id: cachekey
         run: |
+          source "$HOME/.cargo/env"
           echo "lock_hash=$(sha256sum codex/codex-rs/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "toolchain=$(rustc -vV 2>/dev/null | grep '^release' | cut -d' ' -f2 || echo unknown)" >> "$GITHUB_OUTPUT"
 

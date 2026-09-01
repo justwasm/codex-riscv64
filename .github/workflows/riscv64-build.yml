@@ -2,6 +2,9 @@ name: riscv64-build
 
 on:
   push:
+    paths:
+      - '.github/workflows/riscv64-build.yml'
+      - 'scripts/**'
   workflow_dispatch:
 
 concurrency:
@@ -20,7 +23,6 @@ jobs:
       CARGO_BUILD_JOBS: "3"
       CARGO_INCREMENTAL: "0"
       CODEX_PIN: ${{ vars.CODEX_PIN || 'c5a3700dd7ee73a07b30ce1516dae51a264bb8cf' }}
-      CARGO_HOME: "$HOME/.cargo"
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libcap-dev bubblewrap cmake jq
+            build-essential pkg-config libcap-dev bubblewrap cmake jq libssl-dev
 
       - name: Install Rust toolchain
         run: |
@@ -52,6 +54,7 @@ jobs:
       - name: Compute cache key
         id: cachekey
         run: |
+          source "$HOME/.cargo/env"
           echo "lock_hash=$(sha256sum codex/codex-rs/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "toolchain=$(rustc -vV 2>/dev/null | grep '^release' | cut -d' ' -f2 || echo unknown)" >> "$GITHUB_OUTPUT"
 
