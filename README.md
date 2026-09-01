@@ -8,6 +8,7 @@ Builds the [Codex CLI](https://github.com/openai/codex) for **riscv64** (and x86
 | ------ | ----------- | ----- |
 | riscv64 (linux-gnu) | `codex-riscv64-latest` | `codex-riscv64-unknown-linux-gnu.tar.gz` |
 | x86_64 (linux-gnu) | `codex-x86_64-latest` | `codex-x86_64-unknown-linux-gnu.tar.gz` |
+| i686, x86 32-bit (linux-gnu) | `codex-i686-latest` | `codex-i686-unknown-linux-gnu.tar.gz` |
 
 Each tarball contains:
 
@@ -24,6 +25,16 @@ sudo mv codex-riscv64-unknown-linux-gnu /usr/local/bin/codex
 codex --version
 ```
 
+### Install on 32-bit x86 Linux
+
+```sh
+curl -fsSL -o codex-i686.tar.gz \
+  https://github.com/justwasm/codex-riscv64/releases/latest/download/codex-i686-unknown-linux-gnu.tar.gz
+tar -xzf codex-i686.tar.gz
+sudo mv codex-i686-unknown-linux-gnu /usr/local/bin/codex
+codex --version
+```
+
 ## How it works
 
 - `.github/workflows/riscv64-build.yml` builds natively on a Cloud-V free RISC-V
@@ -34,6 +45,8 @@ codex --version
 - `.github/workflows/x86_64-build.yml` builds the same pinned revision on a
   standard `ubuntu-latest` runner so the publish pipeline can be validated
   quickly and both architectures stay in sync.
+- `.github/workflows/i686-build.yml` cross-compiles a 32-bit x86 build
+  (`i686-unknown-linux-gnu`) on `ubuntu-latest` using gcc-multilib.
 - Each successful build packages the binaries, uploads them as a workflow
   artifact (30-day retention) and publishes them to the rolling release tag,
   overwriting the previous asset.

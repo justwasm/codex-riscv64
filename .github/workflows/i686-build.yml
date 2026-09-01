@@ -1,47 +1,46 @@
-name: riscv64-build
+name: i686-build
 
 on:
   push:
     paths:
-      - '.github/workflows/riscv64-build.yml'
+      - '.github/workflows/i686-build.yml'
       - 'scripts/**'
   workflow_dispatch:
 
 concurrency:
-  group: riscv64-build
+  group: i686-build
   cancel-in-progress: true
 
 jobs:
   build:
-    name: RISC-V codex build
-    runs-on: [self-hosted, banana-pi-f3]
-    timeout-minutes: 240
+    name: i686 (x86 32-bit) codex build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "3"
       CARGO_INCREMENTAL: "0"
       CODEX_PIN: ${{ vars.CODEX_PIN || 'c5a3700dd7ee73a07b30ce1516dae51a264bb8cf' }}
+      CARGO_TARGET: i686-unknown-linux-gnu
+      PKG_CONFIG_ALLOW_CROSS: "1"
+      PKG_CONFIG_PATH: /usr/lib/i386-linux-gnu/pkgconfig
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show environment
+      - name: Install system build dependencies (with 32-bit arch)
         run: |
-          uname -m
-          echo "CPUs: $(nproc)"
-          free -h | head -2
-
-      - name: Install system build dependencies
-        run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libcap-dev bubblewrap cmake jq libssl-dev
+            build-essential pkg-config libcap-dev bubblewrap cmake jq libssl-dev \
+            gcc-multilib g++-multilib libssl-dev:i386 libcap-dev:i386
 
       - name: Install Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.95.0
           source "$HOME/.cargo/env"
+          rustup target add i686-unknown-linux-gnu
           rustc -vV
 
       - name: Checkout codex source (pinned)
@@ -58,9 +57,6 @@ jobs:
           echo "lock_hash=$(sha256sum codex/codex-rs/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "toolchain=$(rustc -vV 2>/dev/null | grep '^release' | cut -d' ' -f2 || echo unknown)" >> "$GITHUB_OUTPUT"
 
-      # GitHub cache: 10GB/repo default, LRU eviction after 7 days.
-      # Split into two entries so a registry-only change never re-downloads deps,
-      # and eviction pressure stays manageable.
       - name: Restore cargo registry cache
         id: registrycache
         uses: actions/cache/restore@v4
@@ -68,15 +64,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: riscv64-registry-${{ steps.cachekey.outputs.lock_hash }}
+          key: i686-registry-${{ steps.cachekey.outputs.lock_hash }}
 
       - name: Restore build cache
         id: buildcache
         uses: actions/cache/restore@v4
         with:
           path: codex/codex-rs/target
-          # Exclude dirs that are cheap to regenerate or unstable.
-          key: riscv64-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+          key: i686-target-${{ env.CARGO_TARGET }}-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
 
       - name: Fetch dependencies
         run: |
@@ -89,16 +84,13 @@ jobs:
           source "$HOME/.cargo/env"
           rustup component add clippy rustfmt rust-src
           cd codex/codex-rs
-          df -h . | tail -1
-          cargo build --release --locked --bin codex --bin bwrap
-          df -h . | tail -1
-          ls -lh target/release/codex target/release/bwrap
-          file target/release/codex
+          cargo build --release --locked --target "$CARGO_TARGET" --bin codex --bin bwrap
+          ls -lh "target/$CARGO_TARGET/release/codex" "target/$CARGO_TARGET/release/bwrap"
+          file "target/$CARGO_TARGET/release/codex"
 
       - name: Smoke test
         run: |
-          ./codex/codex-rs/target/release/codex --version
-          ./codex/codex-rs/target/release/bwrap --version 2>/dev/null || true
+          ./codex/codex-rs/target/i686-unknown-linux-gnu/release/codex --version
 
       - name: Save cargo registry cache
         if: always() && steps.registrycache.outputs.cache-hit != 'true'
@@ -107,31 +99,31 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: riscv64-registry-${{ steps.cachekey.outputs.lock_hash }}
+          key: i686-registry-${{ steps.cachekey.outputs.lock_hash }}
 
       - name: Save build cache
         if: always() && steps.buildcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: codex/codex-rs/target
-          key: riscv64-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+          key: i686-target-${{ env.CARGO_TARGET }}-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
 
       - name: Package release tarball
         if: success()
         run: |
           mkdir -p dist
-          cp codex/codex-rs/target/release/codex dist/codex-riscv64-unknown-linux-gnu
-          cp codex/codex-rs/target/release/bwrap dist/bwrap-riscv64
+          cp codex/codex-rs/target/i686-unknown-linux-gnu/release/codex dist/codex-i686-unknown-linux-gnu
+          cp codex/codex-rs/target/i686-unknown-linux-gnu/release/bwrap dist/bwrap-i686
           cd dist
-          tar -czf ../codex-riscv64-unknown-linux-gnu.tar.gz codex-riscv64-unknown-linux-gnu bwrap-riscv64
-          sha256sum ../codex-riscv64-unknown-linux-gnu.tar.gz
+          tar -czf ../codex-i686-unknown-linux-gnu.tar.gz codex-i686-unknown-linux-gnu bwrap-i686
+          sha256sum ../codex-i686-unknown-linux-gnu.tar.gz
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: codex-riscv64-unknown-linux-gnu
-          path: codex-riscv64-unknown-linux-gnu.tar.gz
+          name: codex-i686-unknown-linux-gnu
+          path: codex-i686-unknown-linux-gnu.tar.gz
           retention-days: 30
 
       - name: Publish GitHub release
@@ -141,10 +133,10 @@ jobs:
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          TAG="codex-riscv64-latest"
-          ASSET="codex-riscv64-unknown-linux-gnu.tar.gz"
+          TAG="codex-i686-latest"
+          ASSET="codex-i686-unknown-linux-gnu.tar.gz"
           COMMIT="$(git -C codex rev-parse --short HEAD)"
-          CODEX_VER="$(./codex/codex-rs/target/release/codex --version 2>&1 | head -1 || echo unknown)"
+          CODEX_VER="$(./codex/codex-rs/target/i686-unknown-linux-gnu/release/codex --version 2>&1 | head -1 || echo unknown)"
           AUTH="Authorization: Bearer $GH_TOKEN"
           API="https://api.github.com/repos/$REPO"
 
@@ -152,7 +144,7 @@ jobs:
           RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' 2>/dev/null || true)"
           if [ -z "$RELEASE_ID" ]; then
             curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex riscv64 (latest)\",\"body\":\"Codex CLI riscv64 build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex i686 (latest)\",\"body\":\"Codex CLI i686 (x86 32-bit) build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
               "$API/releases" >/dev/null 2>&1 || true
             RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
           fi
