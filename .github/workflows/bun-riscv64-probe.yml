@@ -1,0 +1,65 @@
+name: bun-riscv64-probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/bun-riscv64-probe.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: bun-riscv64-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Bun RISC-V support probe
+    runs-on: [self-hosted, banana-pi-f3]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential clang-21 lld-21 llvm-21 cmake ninja-build pkg-config \
+            libtool golang ruby-full python3 perl git curl wget unzip xz-utils
+
+      - name: Install Rust nightly
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup show
+          rustc -vV
+
+      - name: Checkout Bun source
+        env:
+          BUN_PIN: 561641b6e1b1247c1a6ff40bfe175350de5ef82a
+        run: |
+          git clone --depth 1 https://github.com/oven-sh/bun.git bun
+          git -C bun fetch --depth 1 origin "$BUN_PIN"
+          git -C bun checkout -q "$BUN_PIN"
+          echo "bun revision: $(git -C bun rev-parse --short HEAD)"
+
+      - name: Inspect architecture support
+        run: |
+          source "$HOME/.cargo/env"
+          cd bun
+          uname -m
+          rustup target list --installed
+          grep -n 'type Arch\|Unsupported host architecture\|Bun builds on' scripts/build/config.ts
+          grep -n 'riscv64' rust-toolchain.toml scripts/build/rust.ts || true
+
+      - name: Resolve Rust workspace
+        run: |
+          source "$HOME/.cargo/env"
+          cd bun
+          cargo metadata --no-deps --locked --format-version 1 > /tmp/bun-metadata.json
+          grep -o '"name":"bun_runtime"' /tmp/bun-metadata.json | head -1
+
+      - name: Check bun_runtime for RISC-V
+        run: |
+          source "$HOME/.cargo/env"
+          cd bun
+          rustup target add riscv64gc-unknown-linux-gnu
+          cargo check -p bun_runtime --lib --target riscv64gc-unknown-linux-gnu --locked
