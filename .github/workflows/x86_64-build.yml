@@ -1,34 +1,26 @@
-name: riscv64-build
+name: x86_64-build
 
 on:
   push:
   workflow_dispatch:
 
 concurrency:
-  group: riscv64-build
+  group: x86_64-build
   cancel-in-progress: true
 
 jobs:
   build:
-    name: RISC-V codex build
-    runs-on: [self-hosted, banana-pi-f3]
-    timeout-minutes: 240
+    name: x86_64 codex build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_BUILD_JOBS: "3"
       CARGO_INCREMENTAL: "0"
       CODEX_PIN: c5a3700dd7ee73a07b30ce1516dae51a264bb8cf
-      CARGO_HOME: "$HOME/.cargo"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Show environment
-        run: |
-          uname -m
-          echo "CPUs: $(nproc)"
-          free -h | head -2
 
       - name: Install system build dependencies
         run: |
@@ -55,24 +47,20 @@ jobs:
           echo "lock_hash=$(sha256sum codex/codex-rs/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "toolchain=$(rustc -vV 2>/dev/null | grep '^release' | cut -d' ' -f2 || echo unknown)" >> "$GITHUB_OUTPUT"
 
-      # GitHub cache: 10GB/repo default, LRU eviction after 7 days.
-      # Split into two entries so a registry-only change never re-downloads deps,
-      # and eviction pressure stays manageable.
       - name: Restore cargo registry cache
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: riscv64-registry-${{ steps.cachekey.outputs.lock_hash }}
+          key: x86-registry-${{ steps.cachekey.outputs.lock_hash }}
 
       - name: Restore build cache
         id: buildcache
         uses: actions/cache/restore@v4
         with:
           path: codex/codex-rs/target
-          # Exclude dirs that are cheap to regenerate or unstable.
-          key: riscv64-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+          key: x86-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
 
       - name: Fetch dependencies
         run: |
@@ -85,16 +73,13 @@ jobs:
           source "$HOME/.cargo/env"
           rustup component add clippy rustfmt rust-src
           cd codex/codex-rs
-          df -h . | tail -1
           cargo build --release --locked --bin codex --bin bwrap
-          df -h . | tail -1
           ls -lh target/release/codex target/release/bwrap
           file target/release/codex
 
       - name: Smoke test
         run: |
           ./codex/codex-rs/target/release/codex --version
-          ./codex/codex-rs/target/release/bwrap --version 2>/dev/null || true
 
       - name: Save cargo registry cache
         if: always()
@@ -103,31 +88,31 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: riscv64-registry-${{ steps.cachekey.outputs.lock_hash }}
+          key: x86-registry-${{ steps.cachekey.outputs.lock_hash }}
 
       - name: Save build cache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: codex/codex-rs/target
-          key: riscv64-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+          key: x86-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
 
       - name: Package release tarball
         if: success()
         run: |
           mkdir -p dist
-          cp codex/codex-rs/target/release/codex dist/codex-riscv64-unknown-linux-gnu
-          cp codex/codex-rs/target/release/bwrap dist/bwrap-riscv64
+          cp codex/codex-rs/target/release/codex dist/codex-x86_64-unknown-linux-gnu
+          cp codex/codex-rs/target/release/bwrap dist/bwrap-x86_64
           cd dist
-          tar -czf ../codex-riscv64-unknown-linux-gnu.tar.gz codex-riscv64-unknown-linux-gnu bwrap-riscv64
-          sha256sum ../codex-riscv64-unknown-linux-gnu.tar.gz
+          tar -czf ../codex-x86_64-unknown-linux-gnu.tar.gz codex-x86_64-unknown-linux-gnu bwrap-x86_64
+          sha256sum ../codex-x86_64-unknown-linux-gnu.tar.gz
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: codex-riscv64-unknown-linux-gnu
-          path: codex-riscv64-unknown-linux-gnu.tar.gz
+          name: codex-x86_64-unknown-linux-gnu
+          path: codex-x86_64-unknown-linux-gnu.tar.gz
           retention-days: 30
 
       - name: Publish GitHub release
@@ -137,8 +122,8 @@ jobs:
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          TAG="codex-riscv64-latest"
-          ASSET="codex-riscv64-unknown-linux-gnu.tar.gz"
+          TAG="codex-x86_64-latest"
+          ASSET="codex-x86_64-unknown-linux-gnu.tar.gz"
           COMMIT="$(git -C codex rev-parse --short HEAD)"
           CODEX_VER="$(./codex/codex-rs/target/release/codex --version 2>&1 | head -1 || echo unknown)"
           AUTH="Authorization: Bearer $GH_TOKEN"
@@ -148,7 +133,7 @@ jobs:
           RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' 2>/dev/null || true)"
           if [ -z "$RELEASE_ID" ]; then
             curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex riscv64 (latest)\",\"body\":\"Codex CLI riscv64 build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex x86_64 (latest)\",\"body\":\"Codex CLI x86_64 build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
               "$API/releases" >/dev/null
             RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
           fi
