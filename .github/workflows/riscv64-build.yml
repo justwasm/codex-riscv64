@@ -28,3 +28,18 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.95.0
           source "$HOME/.cargo/env"
           rustc -vV
+
+      - name: Checkout codex source (pinned)
+        run: |
+          git clone --depth 1 https://github.com/openai/codex.git codex
+          git -C codex fetch --depth 1 origin c5a3700dd7ee73a07b30ce1516dae51a264bb8cf
+          git -C codex checkout -q c5a3700dd7ee73a07b30ce1516dae51a264bb8cf
+
+      - name: Fetch dependencies and verify lockfile resolution
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          source "$HOME/.cargo/env"
+          cd codex/codex-rs
+          cargo fetch --locked
+          cargo tree -p codex-cli --depth 0
