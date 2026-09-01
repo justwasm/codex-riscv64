@@ -18,7 +18,7 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_INCREMENTAL: "0"
-      CODEX_PIN: c5a3700dd7ee73a07b30ce1516dae51a264bb8cf
+      CODEX_PIN: ${{ vars.CODEX_PIN || 'c5a3700dd7ee73a07b30ce1516dae51a264bb8cf' }}
     steps:
       - uses: actions/checkout@v4
 
