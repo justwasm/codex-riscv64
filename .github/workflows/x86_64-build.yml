@@ -134,7 +134,7 @@ jobs:
           if [ -z "$RELEASE_ID" ]; then
             curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
               -d "{\"tag_name\":\"$TAG\",\"name\":\"codex x86_64 (latest)\",\"body\":\"Codex CLI x86_64 build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
-              "$API/releases" >/dev/null
+              "$API/releases" >/dev/null 2>&1 || true
             RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
           fi
 
