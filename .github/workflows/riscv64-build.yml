@@ -43,3 +43,19 @@ jobs:
           cd codex/codex-rs
           cargo fetch --locked
           cargo tree -p codex-cli --depth 0
+
+      - name: Build release binaries
+        timeout-minutes: 180
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          CARGO_BUILD_JOBS: "3"
+          CARGO_INCREMENTAL: "0"
+        run: |
+          source "$HOME/.cargo/env"
+          rustup component add clippy rustfmt rust-src
+          cd codex/codex-rs
+          df -h . | tail -1
+          cargo build --release --locked --bin codex --bin bwrap
+          df -h . | tail -1
+          ls -lh target/release/codex target/release/bwrap
+          file target/release/codex
