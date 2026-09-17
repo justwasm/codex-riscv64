@@ -180,10 +180,23 @@ jobs:
           key: musl-${{ matrix.goarch }}-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
 
       - name: Fetch dependencies
+        if: matrix.goarch != 'i686'
         run: |
           source "$HOME/.cargo/env"
           cd codex/codex-rs
           cargo fetch --locked
+
+      # i686 skips --locked because the vendored seccompiler (path dep
+      # registered via [patch.crates-io]) needs a fresh lockfile entry —
+      # there's no way to teach cargo about a path replacement without
+      # adding the path dep to the lock. The modified lockfile lives
+      # inside the openai/codex checkout and never gets committed back.
+      - name: Fetch dependencies (i686)
+        if: matrix.goarch == 'i686'
+        run: |
+          source "$HOME/.cargo/env"
+          cd codex/codex-rs
+          cargo fetch
 
       # Build a per-target musl libssl.a / libcrypto.a via Zig cc so
       # cargo zigbuild can statically link against openssl-sys. Required
