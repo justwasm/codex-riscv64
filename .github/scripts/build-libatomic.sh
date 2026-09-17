@@ -5,10 +5,9 @@
 # doesn't ship libatomic, so without this shim the link step fails with
 #   ld.lld: error: undefined symbol: __atomic_is_lock_free
 #
-# The shim source at .github/patches/libatomic-shim/atomic_shim.c just
-# reports "not lock-free" for 8/16-byte atomics — true on i386 anyway,
-# so openssl takes the same locking fallback it would with a real
-# libatomic.
+# The i386 assembly shim at .github/patches/libatomic-shim/atomic_shim.S
+# provides the missing runtime symbol without conflicting with clang's
+# __atomic_is_lock_free language builtin.
 #
 # Only i686 trips this: x86_64/aarch64/riscv64 expand __atomic_is_lock_free
 # at compile time (clang/gcc can prove the size is always small enough).
@@ -35,30 +34,22 @@ zig_target="x86-linux-musl"
 runner_temp="${RUNNER_TEMP:-/tmp}"
 libatomic_root="${runner_temp}/codex-musl-tools-${TARGET}/libatomic"
 libatomic_prefix="${libatomic_root}/prefix"
-shim_src="${GITHUB_WORKSPACE}/.github/patches/libatomic-shim/atomic_shim.c"
+shim_src="${GITHUB_WORKSPACE}/.github/patches/libatomic-shim/atomic_shim.S"
 
 if [[ ! -f "${libatomic_prefix}/lib/libatomic.a" ]]; then
   mkdir -p "${libatomic_prefix}/lib" "${libatomic_root}/src"
-  cp "${shim_src}" "${libatomic_root}/src/atomic_shim.c"
+  cp "${shim_src}" "${libatomic_root}/src/atomic_shim.S"
 
   (
     cd "${libatomic_root}/src"
-    # No -fno-builtin-* needed: the shim defines the function under a
-    # different name (`atomic_is_lock_free_shim`) and asm-aliases it to
-    # the canonical symbol, which sidesteps clang's language-builtin
-    # recognition for __atomic_is_lock_free entirely.
-    zig cc -target "${zig_target}" -c atomic_shim.c \
-      -O2 \
+    zig cc -target "${zig_target}" -c atomic_shim.S \
       -o atomic_shim.o
     zig ar rcs "${libatomic_prefix}/lib/libatomic.a" atomic_shim.o
   )
 fi
 
-# Make the linker pick up libatomic.a for the target. Appending
-# -C link-arg=… to RUSTFLAGS preserves cargo-zigbuild's own linker
-# wrapper (which it injects separately via CARGO_TARGET_<TARGET>_LINKER),
-# so the static lib path lands on rustc's link line after the .rlib
-# archives — guaranteeing libatomic.a is consulted last, after openssl's
-# .a has been scanned for undefined symbols.
-echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-L${libatomic_prefix}/lib -C link-arg=-latomic" \
+# Force the shim object into the final link regardless of static archive
+# ordering. A plain -latomic can be scanned before openssl introduces the
+# undefined symbol and therefore skipped by the linker.
+echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-Wl,--whole-archive -C link-arg=${libatomic_prefix}/lib/libatomic.a -C link-arg=-Wl,--no-whole-archive" \
   >> "${GITHUB_ENV:-/dev/null}"
