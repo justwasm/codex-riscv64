@@ -1,0 +1,255 @@
+# Cross-build openai/codex on ubuntu-latest as fully static musl binaries
+# using cargo-zigbuild + Zig. Companion to the glibc workflows
+# (x86_64-build.yml, i686-build.yml, riscv64-build.yml) — same source,
+# same binaries, different (static) ABI. Asset name carries the suffix
+# (-unknown-linux-musl vs -unknown-linux-gnu) so both flavors coexist on
+# the per-arch rolling release.
+#
+# bwrap is currently skipped on this path: its build script vendors
+# bubblewrap's C sources and links them against libcap via pkg-config,
+# which requires a hand-rolled zigcc shim + a target sysroot (see
+# openai/codex .github/scripts/install-musl-build-tools.sh). On a
+# future pass we'll wire that up; for now the cross build produces
+# codex only and the host workflow remains the source of bwrap.
+
+name: musl-build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/musl-build.yml'
+
+concurrency:
+  group: musl-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: musl/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # goarch echoes Rust's --target GOARCH so the Zig target triple
+        # $(goarch)-linux-musl lines up with ${{ matrix.target }} below.
+        # alpine_platform is the Docker/QEMU platform string — linux/amd64
+        # for x86_64, linux/386 for i686, linux/arm64 for aarch64,
+        # linux/riscv64 for riscv64.
+        include:
+          - goarch: x86_64
+            target: x86_64-unknown-linux-musl
+            alpine_platform: linux/amd64
+            release_tag: codex-x86_64-latest
+            asset_suffix: x86_64
+          - goarch: i686
+            target: i686-unknown-linux-musl
+            alpine_platform: linux/386
+            release_tag: codex-i686-latest
+            asset_suffix: i686
+          - goarch: aarch64
+            target: aarch64-unknown-linux-musl
+            alpine_platform: linux/arm64
+            release_tag: codex-aarch64-latest
+            asset_suffix: aarch64
+          - goarch: riscv64gc
+            target: riscv64gc-unknown-linux-musl
+            alpine_platform: linux/riscv64
+            release_tag: codex-riscv64-latest
+            asset_suffix: riscv64
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_INCREMENTAL: "0"
+      CODEX_PIN: ${{ vars.CODEX_PIN || 'c5a3700dd7ee73a07b30ce1516dae51a264bb8cf' }}
+      CODEX_SKIP_BWRAP_BUILD: "1"
+      # Disable aws-lc jitter entropy code path on musl builders (mirrors
+      # upstream openai/codex rust-release.yml; the per-target _x86_64_…
+      # form is needed too and is set in a dedicated step below since env
+      # keys can't reference matrix values directly).
+      AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      # i686/aarch64 cross-tools come from g++-multilib / g++-arm-linux-gnu
+      # so any pkg-config probe (libcap on host glibc during the host-only
+      # build-script compile, e.g.) can resolve. musl linking itself is
+      # handed to Zig.
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libcap-dev cmake jq libssl-dev zlib1g-dev axel
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.95.0
+          source "$HOME/.cargo/env"
+          rustup target add "${{ matrix.target }}"
+          rustup component add clippy rustfmt
+          rustc -vV
+
+      - name: Install Zig
+        shell: bash
+        run: |
+          # Pinned Zig dev build; sha256 verified to avoid surprise
+          # upgrades. axel --num-connections=16 keeps the download under
+          # the GitHub Actions 60-second step ceiling on this runner.
+          ZIG_VERSION=0.17.0-dev.2151+2ec5523d5
+          ZIG_ARCHIVE="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          axel --num-connections=16 --output="${ZIG_ARCHIVE}" \
+            "https://ziglang.org/builds/${ZIG_ARCHIVE}"
+          echo "6393818b7e318bd4ffa345a736a092d780df9ba257b2e7b56cd6366a7a40584b  ${ZIG_ARCHIVE}" | sha256sum --check
+          tar --extract --file "${ZIG_ARCHIVE}"
+          echo "${PWD}/zig-x86_64-linux-${ZIG_VERSION}" >> "${GITHUB_PATH}"
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
+      - name: Set per-target aws-lc env (musl)
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          # mirror upstream openai/codex rust-release.yml: the per-target
+          # form uses dashes → underscores. AWS_LC_SYS_NO_JITTER_ENTROPY is
+          # also set globally in env above.
+          var="AWS_LC_SYS_NO_JITTER_ENTROPY_${target//-/_}"
+          echo "${var}=1" >> "$GITHUB_ENV"
+
+      - name: Checkout codex source (pinned)
+        run: |
+          git clone --depth 1 https://github.com/openai/codex.git codex
+          git -C codex fetch --depth 1 origin "$CODEX_PIN"
+          git -C codex checkout -q "$CODEX_PIN"
+          echo "codex revision: $(git -C codex rev-parse --short HEAD)"
+
+      - name: Compute cache key
+        id: cachekey
+        run: |
+          source "$HOME/.cargo/env"
+          echo "lock_hash=$(sha256sum codex/codex-rs/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "toolchain=$(rustc -vV 2>/dev/null | grep '^release' | cut -d' ' -f2 || echo unknown)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: musl-${{ matrix.goarch }}-registry-${{ steps.cachekey.outputs.lock_hash }}
+
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: codex/codex-rs/target
+          key: musl-${{ matrix.goarch }}-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+
+      - name: Fetch dependencies
+        run: |
+          source "$HOME/.cargo/env"
+          cd codex/codex-rs
+          cargo fetch --locked
+
+      - name: Build static release binary
+        run: |
+          source "$HOME/.cargo/env"
+          cd codex/codex-rs
+          # -C target-feature=+crt-static forces Rust to emit a static CRT
+          # even when the host would default to dynamic. cargo-zigbuild
+          # hands the linker off to Zig's bundled musl toolchain, so the
+          # output is fully static. CODEX_SKIP_BWRAP_BUILD=1 (env above)
+          # tells codex-bwrap's build script to skip compiling bubblewrap
+          # against libcap — pkg-config can't resolve libcap without a
+          # target sysroot, and bwrap is out of scope for this first
+          # cross pass.
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo zigbuild --release --locked \
+              --target "${{ matrix.target }}" \
+              --bin codex
+          ls -lh "target/${{ matrix.target }}/release/codex"
+          file "target/${{ matrix.target }}/release/codex"
+
+      - name: Verify static Linux binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY="codex/codex-rs/target/${{ matrix.target }}/release/codex"
+          if readelf -l "${BINARY}" | grep -q 'Requesting program interpreter'; then
+            echo "codex: has a dynamic loader — not static."
+            exit 1
+          fi
+          if readelf -d "${BINARY}" | grep -q '(NEEDED)'; then
+            echo "codex: has dynamic library dependencies — not static."
+            exit 1
+          fi
+          echo "codex: static (no PT_INTERP, no (NEEDED))."
+
+      - name: Set up QEMU for Alpine verification
+        uses: docker/setup-qemu-action@v3
+
+      - name: Run static Linux binary in Alpine
+        run: |
+          mkdir -p dist
+          cp "codex/codex-rs/target/${{ matrix.target }}/release/codex" \
+             "dist/codex-${{ matrix.asset_suffix }}-unknown-linux-musl"
+          chmod +x "dist/codex-${{ matrix.asset_suffix }}-unknown-linux-musl"
+          docker run --rm --platform "${{ matrix.alpine_platform }}" \
+            --volume "${PWD}/dist:/dist:ro" \
+            alpine:3.21 \
+            "/dist/codex-${{ matrix.asset_suffix }}-unknown-linux-musl" --version
+          docker run --rm --platform "${{ matrix.alpine_platform }}" \
+            --volume "${PWD}/dist:/dist:ro" \
+            alpine:3.21 \
+            "/dist/codex-${{ matrix.asset_suffix }}-unknown-linux-musl" --help >/dev/null
+
+      - name: Package release tarball
+        if: success()
+        run: |
+          cd dist
+          tar -czf "../codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz" \
+            "codex-${{ matrix.asset_suffix }}-unknown-linux-musl"
+          sha256sum "../codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz"
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-${{ matrix.asset_suffix }}-unknown-linux-musl
+          path: codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz
+          retention-days: 30
+
+      - name: Publish GitHub release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          TAG="${{ matrix.release_tag }}"
+          ASSET="codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz"
+          COMMIT="$(git -C codex rev-parse --short HEAD)"
+          CODEX_VER="$(./codex/codex-rs/target/${{ matrix.target }}/release/codex --version 2>&1 | head -1 || echo unknown)"
+          AUTH="Authorization: Bearer $GH_TOKEN"
+          API="https://api.github.com/repos/$REPO"
+
+          # Create the (rolling) release if it does not exist yet.
+          RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' 2>/dev/null || true)"
+          if [ -z "$RELEASE_ID" ]; then
+            curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex ${{ matrix.asset_suffix }} (latest)\",\"body\":\"Codex CLI ${{ matrix.asset_suffix }} build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
+              "$API/releases" >/dev/null 2>&1 || true
+            RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
+          fi
+
+          # Remove a stale asset with the same name, then upload the new one.
+          OLD_ASSET_ID="$(curl -fsSL -H "$AUTH" "$API/releases/$RELEASE_ID/assets" | jq -r --arg name "$ASSET" '.[] | select(.name == $name) | .id' | head -1 || true)"
+          if [ -n "$OLD_ASSET_ID" ]; then
+            curl -fsSL -X DELETE -H "$AUTH" "$API/releases/assets/$OLD_ASSET_ID" >/dev/null || true
+          fi
+
+          curl -fsSL -X POST -H "$AUTH" -H "Content-Type: application/gzip" \
+            --data-binary "@$ASSET" \
+            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$ASSET" >/dev/null
+          echo "Published: https://github.com/$REPO/releases/tag/$TAG"
