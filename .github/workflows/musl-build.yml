@@ -145,14 +145,16 @@ jobs:
         if: matrix.goarch == 'i686'
         run: |
           set -euo pipefail
-          # Clone upstream seccompiler (the same crate codex depends on)
-          # and apply a 10-line patch that adds TargetArch::x86. Running
-          # this in CI instead of vendoring keeps codex-riscv64 lean —
-          # patch is 54 lines, vendored crate was 5 MB.
+          # Clone the justwasm/seccompiler fork (rust-vmm/seccompiler @
+          # i686-support, which already carries the 10-line TargetArch::x86
+          # patch). The patch itself lives at
+          # .github/patches/i686/seccompiler-x86.patch in this repo so the
+          # change is reviewable here; the fork just hosts the integrated
+          # result so the workflow stays one git clone + zero apply.
           SECCOMPILER_DIR="codex/codex-rs/vendor/seccompiler"
           rm -rf "${SECCOMPILER_DIR}"
-          git clone --depth 1 https://github.com/rust-vmm/seccompiler.git "${SECCOMPILER_DIR}"
-          (cd "${SECCOMPILER_DIR}" && git apply --whitespace=nowarn "${GITHUB_WORKSPACE}/.github/patches/i686/seccompiler-x86.patch")
+          git clone --depth 1 --branch i686-support \
+            https://github.com/justwasm/seccompiler.git "${SECCOMPILER_DIR}"
           rm -rf "${SECCOMPILER_DIR}/.git"
           mkdir -p codex/codex-rs/.cargo
           cat > codex/codex-rs/.cargo/config.toml <<'EOF'
