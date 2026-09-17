@@ -216,6 +216,19 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-openssl.sh"
 
+      # On i686-musl openssl's threads_pthread.c references
+      # __atomic_is_lock_free as a runtime function; Zig's bundled
+      # i686-linux-musl sysroot doesn't ship libatomic.a, so without a
+      # shim the link step fails. The script emits -L… -latomic into
+      # RUSTFLAGS so the shim's libatomic.a is consulted last, after
+      # openssl's .a is scanned for undefined symbols. No-op on other
+      # arches (they expand __atomic_is_lock_free at compile time).
+      - name: Build libatomic shim (i686)
+        if: matrix.goarch == 'i686'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/build-libatomic.sh"
+
       - name: Build static release binary
         run: |
           source "$HOME/.cargo/env"
@@ -228,7 +241,10 @@ jobs:
           # against libcap — pkg-config can't resolve libcap without a
           # target sysroot, and bwrap is out of scope for this first
           # cross pass.
-          RUSTFLAGS="-C target-feature=+crt-static" \
+          #
+          # RUSTFLAGS already carries `-C link-arg=-L<…> -C link-arg=-latomic`
+          # for i686 (set by build-libatomic.sh) to wire up __atomic_is_lock_free.
+          RUSTFLAGS="-C target-feature=+crt-static ${RUSTFLAGS:-}" \
             cargo zigbuild --release --locked \
               --target "${{ matrix.target }}" \
               --bin codex
