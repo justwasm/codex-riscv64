@@ -145,17 +145,15 @@ jobs:
         run: |
           set -euo pipefail
           # Vendor alongside codex-rs so the [patch.crates-io] paths are
-          # unambiguous. [patch.crates-io] paths in .cargo/config.toml are
-          # resolved relative to that config file's directory by cargo,
-          # so ./vendor/libc / ./vendor/seccompiler under codex-rs work
-          # without absolute paths.
+          # unambiguous. Only seccompiler needs replacing: upstream 0.5.0
+          # has no TargetArch::x86 variant, while libc 0.2.186 already
+          # ships SYS_accept4 for i686 so the SYS_accept fallback in
+          # landlock.rs (added by the patch below) handles the rest.
           mkdir -p codex/codex-rs/vendor
-          cp -r "${GITHUB_WORKSPACE}/.github/patches/i686/vendor/libc"        codex/codex-rs/vendor/libc
           cp -r "${GITHUB_WORKSPACE}/.github/patches/i686/vendor/seccompiler" codex/codex-rs/vendor/seccompiler
           mkdir -p codex/codex-rs/.cargo
           cat > codex/codex-rs/.cargo/config.toml <<'EOF'
           [patch.crates-io]
-          libc        = { path = "vendor/libc" }
           seccompiler = { path = "vendor/seccompiler" }
           EOF
           cat codex/codex-rs/.cargo/config.toml
