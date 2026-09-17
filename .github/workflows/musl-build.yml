@@ -152,6 +152,19 @@ jobs:
           cd codex/codex-rs
           cargo fetch --locked
 
+      # Build a per-target musl libssl.a / libcrypto.a via Zig cc so
+      # cargo zigbuild can statically link against openssl-sys. Required
+      # for every target except x86_64, where the host's libssl-dev
+      # already matches the target arch (cargo happily reuses host's
+      # libssl.a on a same-arch cross). For i686 / aarch64 / riscv64gc
+      # the host openssl has the wrong arch, so we build a static openssl
+      # per-target and emit *_OPENSSL_DIR=… to $GITHUB_ENV.
+      - name: Build per-target musl openssl
+        if: matrix.goarch != 'x86_64'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-openssl.sh"
+
       - name: Build static release binary
         run: |
           source "$HOME/.cargo/env"
