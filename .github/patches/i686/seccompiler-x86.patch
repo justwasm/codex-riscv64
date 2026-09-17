@@ -1,0 +1,54 @@
+diff --git a/src/backend/bpf.rs b/src/backend/bpf.rs
+index 6a102a9..7d93af7 100644
+--- a/src/backend/bpf.rs
++++ b/src/backend/bpf.rs
+@@ -118,6 +118,11 @@ pub const BPF_K: u16 = 0x00;
+ // `#define AUDIT_ARCH_X86_64	(EM_X86_64|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)`
+ pub const AUDIT_ARCH_X86_64: u32 = 62 | 0x8000_0000 | 0x4000_0000;
+ 
++// Architecture identifier for x86 (i386) LE.
++// Defined as:
++// `#define AUDIT_ARCH_I386	(EM_386|__AUDIT_ARCH_LE)`
++pub const AUDIT_ARCH_X86: u32 = 3 | 0x4000_0000;
++
+ // Architecture identifier for aarch64 LE.
+ // Defined as:
+ // `#define AUDIT_ARCH_AARCH64	(EM_AARCH64|__AUDIT_ARCH_64BIT|__AUDIT_ARCH_LE)`
+diff --git a/src/backend/mod.rs b/src/backend/mod.rs
+index a4ff1c4..7fc21c9 100644
+--- a/src/backend/mod.rs
++++ b/src/backend/mod.rs
+@@ -26,7 +26,7 @@ use libc::{
+     SECCOMP_RET_USER_NOTIF,
+ };
+ 
+-use bpf::{ARG_NUMBER_MAX, AUDIT_ARCH_AARCH64, AUDIT_ARCH_RISCV64, AUDIT_ARCH_X86_64, BPF_MAX_LEN};
++use bpf::{ARG_NUMBER_MAX, AUDIT_ARCH_AARCH64, AUDIT_ARCH_RISCV64, AUDIT_ARCH_X86, AUDIT_ARCH_X86_64, BPF_MAX_LEN};
+ 
+ pub use bpf::{sock_filter, BpfProgram, BpfProgramRef};
+ 
+@@ -82,6 +82,8 @@ impl Display for Error {
+ pub enum TargetArch {
+     /// x86_64 arch
+     x86_64,
++    /// x86 (i386) arch
++    x86,
+     /// aarch64 arch
+     aarch64,
+     /// riscv64 arch
+@@ -93,6 +95,7 @@ impl TargetArch {
+     fn get_audit_value(self) -> u32 {
+         match self {
+             TargetArch::x86_64 => AUDIT_ARCH_X86_64,
++            TargetArch::x86 => AUDIT_ARCH_X86,
+             TargetArch::aarch64 => AUDIT_ARCH_AARCH64,
+             TargetArch::riscv64 => AUDIT_ARCH_RISCV64,
+         }
+@@ -104,6 +107,7 @@ impl TryFrom<&str> for TargetArch {
+     fn try_from(input: &str) -> Result<Self> {
+         match input.to_lowercase().as_str() {
+             "x86_64" => Ok(TargetArch::x86_64),
++            "x86" => Ok(TargetArch::x86),
+             "aarch64" => Ok(TargetArch::aarch64),
+             "riscv64" => Ok(TargetArch::riscv64),
+             _ => Err(Error::InvalidTargetArch(input.to_string())),

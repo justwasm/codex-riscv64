@@ -126,12 +126,13 @@ jobs:
           echo "codex revision: $(git -C codex rev-parse --short HEAD)"
 
       # i686 source-level patches: codex's linux-sandbox (libc 0.2.186 +
-      # seccompiler 0.5.0) doesn't compile on x86: libc lacks SYS_accept4,
-      # seccompiler has no TargetArch::x86 variant, and deny_syscall takes
-      # i64 but on x86 libc::SYS_* are i32. landlock.rs patch + vendored
-      # libc 0.2.189 + vendored seccompiler (with x86 support) clear all
-      # three. Pattern borrowed from the i686-build patch set shipped
-      # upstream of codex's own build matrix.
+      # seccompiler 0.5.0) doesn't compile on x86: libc 0.2.186 actually
+      # does export SYS_accept4 on i686 so the landlock.rs patch's
+      # cfg-gated SYS_accept → SYS_accept4 fallback covers it, but
+      # seccompiler 0.5.0 still has no TargetArch::x86 variant. We avoid
+      # vendoring seccompiler (5 MB of generated cargo-vendor output) by
+      # cloning the upstream repo at runtime and applying a small
+      # upstream-compat patch on top.
       - name: Apply i686 source patches
         if: matrix.goarch == 'i686'
         run: |
@@ -140,17 +141,19 @@ jobs:
           git apply --whitespace=nowarn "${GITHUB_WORKSPACE}/.github/patches/i686/landlock.patch"
           echo "applied landlock.rs patch"
 
-      - name: Vendor i686 deps + write .cargo/config.toml
+      - name: Materialize seccompiler fork (i686)
         if: matrix.goarch == 'i686'
         run: |
           set -euo pipefail
-          # Vendor alongside codex-rs so the [patch.crates-io] paths are
-          # unambiguous. Only seccompiler needs replacing: upstream 0.5.0
-          # has no TargetArch::x86 variant, while libc 0.2.186 already
-          # ships SYS_accept4 for i686 so the SYS_accept fallback in
-          # landlock.rs (added by the patch below) handles the rest.
-          mkdir -p codex/codex-rs/vendor
-          cp -r "${GITHUB_WORKSPACE}/.github/patches/i686/vendor/seccompiler" codex/codex-rs/vendor/seccompiler
+          # Clone upstream seccompiler (the same crate codex depends on)
+          # and apply a 10-line patch that adds TargetArch::x86. Running
+          # this in CI instead of vendoring keeps codex-riscv64 lean —
+          # patch is 54 lines, vendored crate was 5 MB.
+          SECCOMPILER_DIR="codex/codex-rs/vendor/seccompiler"
+          rm -rf "${SECCOMPILER_DIR}"
+          git clone --depth 1 https://github.com/rust-vmm/seccompiler.git "${SECCOMPILER_DIR}"
+          (cd "${SECCOMPILER_DIR}" && git apply --whitespace=nowarn "${GITHUB_WORKSPACE}/.github/patches/i686/seccompiler-x86.patch")
+          rm -rf "${SECCOMPILER_DIR}/.git"
           mkdir -p codex/codex-rs/.cargo
           cat > codex/codex-rs/.cargo/config.toml <<'EOF'
           [patch.crates-io]
