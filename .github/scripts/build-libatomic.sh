@@ -43,8 +43,12 @@ if [[ ! -f "${libatomic_prefix}/lib/libatomic.a" ]]; then
 
   (
     cd "${libatomic_root}/src"
+    # -fno-builtin-__atomic_is_lock_free disables clang's recognition
+    # of __atomic_is_lock_free as a language builtin. -fno-builtin alone
+    # is not enough: it only covers library functions (memcpy, strlen,
+    # ...); the __atomic_* family has its own opt-out.
     zig cc -target "${zig_target}" -c atomic_shim.c \
-      -O2 -fno-builtin \
+      -O2 -fno-builtin-__atomic_is_lock_free \
       -o atomic_shim.o
     zig ar rcs "${libatomic_prefix}/lib/libatomic.a" atomic_shim.o
   )
