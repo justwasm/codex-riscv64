@@ -16,10 +16,21 @@ name: musl-build
 
 on:
   workflow_dispatch:
+  # Daily 00:00 UTC: catches whatever upstream openai/codex has landed in
+  # the last 24 h against the CODEX_PIN variable. Predictable, cheap; the
+  # per-run immutable tag (`codex-linux-musl-YYYYMMDD-SHORTSHA`) keeps a
+  # full snapshot regardless of which run actually published the asset.
+  schedule:
+    - cron: "0 0 * * *"
   push:
     paths:
       - '.github/workflows/musl-build.yml'
 
+# cancel-in-progress: true keeps a single live build per group. The semantics
+# we want: cron vs manual dispatch share one slot (don't double-build the
+# same revision); if a manual dispatch is mid-run when cron fires, drop the
+# cron — manual wins. cancel-in-progress cancels the OLDER run, so the newer
+# trigger wins, which is what we want.
 concurrency:
   group: musl-build
   cancel-in-progress: true
