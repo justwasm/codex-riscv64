@@ -238,12 +238,23 @@ jobs:
           # target sysroot, and bwrap is out of scope for this first
           # cross pass.
           #
+          # --config overrides codex-rs/Cargo.toml's release profile: that
+          # profile ships `debug = "line-tables-only"`, `strip = false`,
+          # `split-debuginfo = "off"` — a deliberate "the packaging tool
+          # archives sidecar symbols then strips" handoff that we don't run.
+          # Without the overrides every release tarball carries ~50 MB of
+          # dwarf per arch. Forcing debug = "none" + strip = "symbols" at
+          # build time drops the tarball to ~30 MB and skips the dwarf parse
+          # at startup; the trade-off is no stack-trace symbolication on
+          # crashes, which release binaries never offered anyway.
           # RUSTFLAGS already carries `-C link-arg=-L<…> -C link-arg=-latomic`
           # for i686 (set by build-libatomic.sh) to wire up __atomic_is_lock_free.
           RUSTFLAGS="-C target-feature=+crt-static ${RUSTFLAGS:-}" \
             cargo zigbuild --release --locked \
               --target "${{ matrix.target }}" \
-              --bin codex
+              --bin codex \
+              --config 'profile.release.debug="none"' \
+              --config 'profile.release.strip="symbols"'
           ls -lh "target/${{ matrix.target }}/release/codex"
           file "target/${{ matrix.target }}/release/codex"
 
