@@ -66,6 +66,7 @@ jobs:
       # form is needed too and is set in a dedicated step below since env
       # keys can't reference matrix values directly).
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+      MUSL_TOOLS_DIR: /tmp/codex-musl-tools-${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
 
@@ -173,12 +174,35 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: musl-${{ matrix.goarch }}-registry-${{ steps.cachekey.outputs.lock_hash }}
+          # Fallback to the most recent registry snapshot for any prior
+          # lock hash on the same arch, so a codex Cargo.lock update only
+          # downloads the new crates instead of the world.
+          restore-keys: |
+            musl-${{ matrix.goarch }}-registry-
 
       - name: Restore build cache
         uses: actions/cache/restore@v4
         with:
           path: codex/codex-rs/target
           key: musl-${{ matrix.goarch }}-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+          # Same fallback strategy as registry: a new lock hash inherits
+          # the previous target dir, so the first rebuild after a codex
+          # Cargo.lock bump compiles only the changed crates.
+          restore-keys: |
+            musl-${{ matrix.goarch }}-target-
+
+      - name: Restore openssl sysroot cache
+        # install-musl-openssl.sh from a clean checkout spends ~3 min
+        # compiling OpenSSL 3.6.4 + libatomic.shim from source per arch.
+        # Persist the prefix across runs keyed on arch + openssl_version
+        # so only the first build pays the cost.
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.MUSL_TOOLS_DIR }}
+          key: musl-openssl-${{ matrix.goarch }}-3.6.4
+          restore-keys: |
+            musl-openssl-${{ matrix.goarch }}-
+
 
       - name: Fetch dependencies
         if: matrix.goarch != 'i686'
@@ -290,6 +314,43 @@ jobs:
             --volume "${PWD}/dist:/dist:ro" \
             alpine:3.21 \
             "/dist/codex-${{ matrix.asset_suffix }}-unknown-linux-musl" --help >/dev/null
+
+      - name: Save cargo registry cache
+        # `cache-hit != 'true'` is load-bearing: actions/cache/save@v4
+        # throws when the key already exists. Each arch's lock hash gets
+        # one entry, and only the first push with that hash writes.
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: musl-${{ matrix.goarch }}-registry-${{ steps.cachekey.outputs.lock_hash }}
+
+      - name: Save build cache
+        # The target dir is per-arch and per-toolchain; this is the one
+        # entry that actually shortens the 40-min rebuild on the next run.
+        # LTO/ThinLTO output isn't keyed on the profile override flags
+        # (codegen-units, debug) — rustc invalidates individual artifacts
+        # based on dep hashes, so a profile tweak still gives a high cache
+        # hit rate. A wholesale `--config 'profile.release.lto="fat"'`
+        # change would thrash the cache; intentional, not worth fighting.
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: codex/codex-rs/target
+          key: musl-${{ matrix.goarch }}-target-${{ steps.cachekey.outputs.lock_hash }}-${{ steps.cachekey.outputs.toolchain }}
+
+      - name: Save openssl sysroot cache
+        # Catches the whole $RUNNER_TEMP/codex-musl-tools-<target>/ tree
+        # built by install-musl-openssl.sh + build-libatomic.sh. ~1.5 GB on
+        # disk after a clean build; restoring it on the next run skips the
+        # ~3-min openssl 3.6.4 source compile + the i686 libatomic shim.
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.MUSL_TOOLS_DIR }}
+          key: musl-openssl-${{ matrix.goarch }}-3.6.4
 
       - name: Package release tarball
         if: success()
