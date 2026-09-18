@@ -43,22 +43,18 @@ jobs:
           - goarch: x86_64
             target: x86_64-unknown-linux-musl
             alpine_platform: linux/amd64
-            release_tag: codex-x86_64-latest
             asset_suffix: x86_64
           - goarch: i686
             target: i686-unknown-linux-musl
             alpine_platform: linux/386
-            release_tag: codex-i686-latest
             asset_suffix: i686
           - goarch: aarch64
             target: aarch64-unknown-linux-musl
             alpine_platform: linux/arm64
-            release_tag: codex-aarch64-latest
             asset_suffix: aarch64
           - goarch: riscv64gc
             target: riscv64gc-unknown-linux-musl
             alpine_platform: linux/riscv64
-            release_tag: codex-riscv64-latest
             asset_suffix: riscv64
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -307,7 +303,7 @@ jobs:
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          TAG="${{ matrix.release_tag }}"
+          TAG="codex-linux-musl-latest"
           ASSET="codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz"
           COMMIT="$(git -C codex rev-parse --short HEAD)"
           CODEX_VER="$(./codex/codex-rs/target/${{ matrix.target }}/release/codex --version 2>&1 | head -1 || echo unknown)"
