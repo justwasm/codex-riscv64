@@ -305,18 +305,38 @@ jobs:
           REPO="$GITHUB_REPOSITORY"
           TAG="codex-linux-musl-latest"
           ASSET="codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz"
-          COMMIT="$(git -C codex rev-parse --short HEAD)"
+          COMMIT="$(git -C codex rev-parse HEAD)"
+          COMMIT_SHORT="${COMMIT:0:12}"
           CODEX_VER="$(./codex/codex-rs/target/${{ matrix.target }}/release/codex --version 2>&1 | head -1 || echo unknown)"
+          SOURCE_REPO="https://github.com/openai/codex"
+          SOURCE_COMMIT="${SOURCE_REPO}/commit/${COMMIT}"
+          RELEASE_TITLE="Codex CLI Linux musl (latest)"
+          RELEASE_BODY="Codex CLI static Linux musl binaries for x86_64, i686, aarch64, and riscv64.\n\nSource: ${SOURCE_REPO}\nSource commit: ${SOURCE_COMMIT}\nCommit: ${COMMIT_SHORT}\nVersion: ${CODEX_VER}"
           AUTH="Authorization: Bearer $GH_TOKEN"
           API="https://api.github.com/repos/$REPO"
 
-          # Create the (rolling) release if it does not exist yet.
+          # Create the unified rolling release if it does not exist yet.
           RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' 2>/dev/null || true)"
           if [ -z "$RELEASE_ID" ]; then
+            jq_payload="$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$RELEASE_TITLE" \
+              --arg body "$RELEASE_BODY" \
+              '{tag_name: $tag, name: $name, body: $body}')"
             curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"codex ${{ matrix.asset_suffix }} (latest)\",\"body\":\"Codex CLI ${{ matrix.asset_suffix }} build from openai/codex @ \`$COMMIT\`\\n\\n\`$CODEX_VER\`\"}" \
+              -H "Content-Type: application/json" \
+              -d "$jq_payload" \
               "$API/releases" >/dev/null 2>&1 || true
             RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
+          else
+            jq_payload="$(jq -n \
+              --arg name "$RELEASE_TITLE" \
+              --arg body "$RELEASE_BODY" \
+              '{name: $name, body: $body}')"
+            curl -fsSL -X PATCH -H "$AUTH" -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$jq_payload" \
+              "$API/releases/$RELEASE_ID" >/dev/null
           fi
 
           # Remove a stale asset with the same name, then upload the new one.
