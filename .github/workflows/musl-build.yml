@@ -375,49 +375,86 @@ jobs:
         run: |
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          TAG="codex-linux-musl-latest"
           ASSET="codex-${{ matrix.asset_suffix }}-unknown-linux-musl.tar.gz"
+
+          # Two releases get touched on every successful run:
+          #
+          # 1. Per-run immutable tag `codex-linux-musl-YYYYMMDD-SHORTSHA`.
+          #    Pinned to the exact codex commit and the run's UTC date, so
+          #    every successful dispatch leaves a downloadable snapshot.
+          #    Use these when you need to bisect, compare two builds, or
+          #    ship a specific revision. Tag format chosen so GitHub
+          #    sorts them chronologically (YYYYMMDD > SHA).
+          #
+          # 2. The "always current" rolling tag `codex-linux-musl-latest`
+          #    (separate logic block below). One release, four assets,
+          #    each arch's asset self-overwrites on the next run. Useful
+          #    for `curl .../latest/download/...` scripts.
           COMMIT="$(git -C codex rev-parse HEAD)"
           COMMIT_SHORT="${COMMIT:0:12}"
+          # Use UTC so tag dates don't drift with runner tz.
+          RUN_DATE="$(date -u +%Y%m%d)"
+          RUN_TAG="codex-linux-musl-${RUN_DATE}-${COMMIT_SHORT}"
+
           CODEX_VER="$(./codex/codex-rs/target/${{ matrix.target }}/release/codex --version 2>&1 | head -1 || echo unknown)"
           SOURCE_REPO="https://github.com/openai/codex"
           SOURCE_COMMIT="${SOURCE_REPO}/commit/${COMMIT}"
-          RELEASE_TITLE="Codex CLI Linux musl (latest)"
-          RELEASE_BODY="Codex CLI static Linux musl binaries for x86_64, i686, aarch64, and riscv64.\n\nSource: ${SOURCE_REPO}\nSource commit: ${SOURCE_COMMIT}\nCommit: ${COMMIT_SHORT}\nVersion: ${CODEX_VER}"
-          AUTH="Authorization: Bearer $GH_TOKEN"
-          API="https://api.github.com/repos/$REPO"
 
-          # Create the unified rolling release if it does not exist yet.
-          RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty' 2>/dev/null || true)"
-          if [ -z "$RELEASE_ID" ]; then
-            jq_payload="$(jq -n \
-              --arg tag "$TAG" \
-              --arg name "$RELEASE_TITLE" \
-              --arg body "$RELEASE_BODY" \
-              '{tag_name: $tag, name: $name, body: $body}')"
-            curl -fsSL -X POST -H "$AUTH" -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/json" \
-              -d "$jq_payload" \
-              "$API/releases" >/dev/null 2>&1 || true
-            RELEASE_ID="$(curl -fsSL -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id')"
-          else
-            jq_payload="$(jq -n \
-              --arg name "$RELEASE_TITLE" \
-              --arg body "$RELEASE_BODY" \
-              '{name: $name, body: $body}')"
-            curl -fsSL -X PATCH -H "$AUTH" -H "Accept: application/vnd.github+json" \
-              -H "Content-Type: application/json" \
-              -d "$jq_payload" \
-              "$API/releases/$RELEASE_ID" >/dev/null
-          fi
+          publish_release() {
+            local tag="$1" title="$2"
+            local auth="Authorization: Bearer $GH_TOKEN"
+            local api="https://api.github.com/repos/$REPO"
+            local body="Codex CLI static Linux musl binaries for x86_64, i686, aarch64, and riscv64.\n\nSource: ${SOURCE_REPO}\nSource commit: ${SOURCE_COMMIT}\nCommit: ${COMMIT_SHORT}\nBuild date (UTC): ${RUN_DATE}\nVersion: ${CODEX_VER}"
 
-          # Remove a stale asset with the same name, then upload the new one.
-          OLD_ASSET_ID="$(curl -fsSL -H "$AUTH" "$API/releases/$RELEASE_ID/assets" | jq -r --arg name "$ASSET" '.[] | select(.name == $name) | .id' | head -1 || true)"
-          if [ -n "$OLD_ASSET_ID" ]; then
-            curl -fsSL -X DELETE -H "$AUTH" "$API/releases/assets/$OLD_ASSET_ID" >/dev/null || true
-          fi
+            local release_id
+            release_id="$(curl -fsSL -H "$auth" "$api/releases/tags/$tag" | jq -r '.id // empty' 2>/dev/null || true)"
 
-          curl -fsSL -X POST -H "$AUTH" -H "Content-Type: application/gzip" \
-            --data-binary "@$ASSET" \
-            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$ASSET" >/dev/null
-          echo "Published: https://github.com/$REPO/releases/tag/$TAG"
+            if [ -z "$release_id" ]; then
+              local payload
+              payload="$(jq -n --arg tag "$tag" --arg name "$title" --arg body "$body" \
+                '{tag_name: $tag, name: $name, body: $body}')"
+              curl -fsSL -X POST -H "$auth" -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                -d "$payload" \
+                "$api/releases" >/dev/null 2>&1 || true
+              release_id="$(curl -fsSL -H "$auth" "$api/releases/tags/$tag" | jq -r '.id')"
+            else
+              # Idempotent refresh — keeps title/body in sync with the latest
+              # source pointer on every publish, so the immutable per-run
+              # release still reflects the current source-of-truth link.
+              local payload
+              payload="$(jq -n --arg name "$title" --arg body "$body" '{name: $name, body: $body}')"
+              curl -fsSL -X PATCH -H "$auth" -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                -d "$payload" \
+                "$api/releases/$release_id" >/dev/null
+            fi
+
+            # Replace this arch's stale asset on the release, leave other
+            # arches' assets alone. The per-run tag accumulates one asset
+            # per arch that ran in this dispatch; cross-arch artifacts from
+            # *previous* runs stay put, which is the right semantics for an
+            # immutable snapshot of "codex @ <commit> built by run <date>".
+            local old_id
+            old_id="$(curl -fsSL -H "$auth" "$api/releases/$release_id/assets" | jq -r --arg name "$ASSET" '.[] | select(.name == $name) | .id' | head -1 || true)"
+            if [ -n "$old_id" ]; then
+              curl -fsSL -X DELETE -H "$auth" "$api/releases/assets/$old_id" >/dev/null || true
+            fi
+
+            curl -fsSL -X POST -H "$auth" -H "Content-Type: application/gzip" \
+              --data-binary "@$ASSET" \
+              "https://uploads.github.com/repos/$REPO/releases/$release_id/assets?name=$ASSET" >/dev/null
+
+            echo "Published: https://github.com/$REPO/releases/tag/$tag"
+          }
+
+          # Immutable per-run snapshot. Created on the first dispatch that
+          # publishes this (date, commit) pair, then refreshed on every
+          # subsequent run that lands on the same pair (e.g. re-runs of a
+          # flaky job) so title/body stay current.
+          publish_release "$RUN_TAG" "Codex CLI Linux musl (${RUN_DATE} @ ${COMMIT_SHORT})"
+
+          # Rolling "latest" entry: one release with four self-overwriting
+          # assets, refreshed on every run so /releases/latest/download/...
+          # always serves the freshest binary.
+          publish_release "codex-linux-musl-latest" "Codex CLI Linux musl (latest)"
